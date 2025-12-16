@@ -5,7 +5,7 @@ import { ThemedView } from '@/components/themed-view';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Collapsible } from '@/components/ui/collapsible';
 
-import { getData } from '../../src/services/supabase';
+import { getData, supabase } from '../../src/services/supabase';
 
 interface ParkingSpot {
   id: string;
@@ -17,6 +17,29 @@ export default function ExploreScreen() {
   const [parkingSpots, setParkingSpots] = useState<ParkingSpot[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const setupRealTimeUpdates = () => {
+    const channel = supabase.channel('parking-spots-updates')
+      .on('postgres_changes', { 
+        event: 'UPDATE', 
+        schema: 'public', 
+        table: 'parking_spots' 
+      }, (payload) => {
+        console.log('Real-time update received in zones tab:', payload);
+        
+        // Update the parkingSpots state with the new data
+        setParkingSpots(prevSpots => 
+          prevSpots.map(spot => 
+            spot.id === payload.new.id 
+              ? { ...spot, ...payload.new }
+              : spot
+          )
+        );
+      })
+      .subscribe();
+      
+    return channel;
+  };
 
   const fetchParkingSpots = async () => {
     setLoading(true);
@@ -41,6 +64,14 @@ export default function ExploreScreen() {
 
   useEffect(() => {
     fetchParkingSpots();
+    
+    // Set up real-time updates
+    const channel = setupRealTimeUpdates();
+    
+    // Cleanup function to unsubscribe when component unmounts
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const getStatusColor = (status: string) => {

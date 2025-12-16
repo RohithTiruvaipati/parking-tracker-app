@@ -2,43 +2,44 @@ import { useEffect, useState } from 'react';
 import { View, Text, Pressable, ScrollView, StyleSheet, ActivityIndicator } from 'react-native';
 import * as Location from 'expo-location';
 import * as turf from '@turf/turf';
-import { loadHomeData, updatePolygonAvailability } from '../../src/services/supabase';
+import { updatePolygonAvailability, supabase, getData } from '../../src/services/supabase';
 import { Link } from 'expo-router';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 
-const HOME_ID = 'H1';
-
 export default function HomeScreen() {
-  const [polygon, setPolygon] = useState<any>(null);
+  const [allSpots, setAllSpots] = useState<any[]>([]);
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [inside, setInside] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [accuracy, setAccuracy] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [realTimeUpdate, setRealTimeUpdate] = useState<any []>([]);
 
-  const loadPolygon = async () => {
+  const loadAllSpots = async () => {
     setIsLoading(true);
     setError(null);
 
-    const { data, error } = await loadHomeData(HOME_ID);
+    try {
+      const data = await getData();
 
-    if (error) {
-      setError(error.message);
+      if (!data || data.length === 0) {
+        setError('No parking spots found');
+        setAllSpots([]);
+        setIsLoading(false);
+        return;
+      }
+
+      setAllSpots(data);
+      setIsLoading(false);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'An unknown error occurred');
+      setAllSpots([]);
       setIsLoading(false);
       return;
     }
-
-    if (!data || data.length === 0 || !data[0].polygon) {
-      setError('Parking zone not found');
-      setIsLoading(false);
-      return;
-    }
-
-    setPolygon(data[0].polygon);
-    setIsLoading(false);
   };
 
   const startLocationTracking = async () => {
@@ -55,33 +56,70 @@ export default function HomeScreen() {
         timeInterval: 2000,
         distanceInterval: 2
       },
-      (location) => {
+      async (location) => {
+        if (allSpots.length === 0) return;
+
         const { latitude, longitude, accuracy } = location.coords;
 
         setCoords({ lat: latitude, lng: longitude });
         setAccuracy(accuracy ?? null);
 
-        if (polygon) {
-          const point = turf.point([longitude, latitude]);
-          const isInside = turf.booleanPointInPolygon(point, polygon);
-          setInside(isInside);
-          updatePolygonAvailability(HOME_ID, isInside);
+        let activeSpotID = null;
+
+        const point = turf.point([longitude, latitude]);
+
+        for (const spot of allSpots) {
+          if (!spot.polygon) continue;
+
+          const isInside = turf.booleanPointInPolygon(point, spot.polygon);
+
+          if (isInside) {
+            activeSpotID = spot.id;
+            break;
+          }
+        }
+
+        if (activeSpotID) {
+          setInside(true);
+          updatePolygonAvailability(activeSpotID, true);
+        } else {
+          setInside(false);
         }
       }
     );
   };
 
+  const showRealTime = () => {
+    const channels =  supabase.channel('custom-update-channel')
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'parking_spots'},
+    (payload) => {
+        console.log('channel update received!')
+        setRealTimeUpdate(prev => [...prev, payload]);
+        
+        // Update the allSpots state with the new data
+        setAllSpots(prevSpots => 
+          prevSpots.map(spot => 
+            spot.id === payload.new.id 
+              ? { ...spot, ...payload.new }
+              : spot
+          )
+        );
+    })
+    .subscribe()
+  }
+
 
   useEffect(() => {
-    loadPolygon();
+    loadAllSpots();
+    showRealTime();
   }, []);
 
   useEffect(() => {
-    if (polygon) {
+    if (allSpots.length > 0) {
       startLocationTracking();
       
     }
-  }, [polygon]);
+  }, [allSpots]);
 
 
   return (
@@ -128,7 +166,7 @@ export default function HomeScreen() {
       </View>
 
       <View style={styles.actionsCard}>
-        <Pressable style={styles.actionButton} onPress={loadPolygon} disabled={isLoading}>
+        <Pressable style={styles.actionButton} onPress={loadAllSpots} disabled={isLoading}>
           {isLoading ? (
             <ActivityIndicator color="#ffffff" />
           ) : (
@@ -147,15 +185,72 @@ export default function HomeScreen() {
         </Link>
       </View>
 
-      {polygon && (
-        <View style={styles.detailsCard}>
-          <ThemedText type="subtitle">Zone Details</ThemedText>
-          <View style={styles.polygonInfo}>
-            <ThemedText style={styles.detailLabel}>Coordinates:</ThemedText>
-            <ThemedText style={styles.detailValue}>
-              {polygon.coordinates[0].length} points
+      <View style={styles.statusCard}>
+        <View style={styles.statusHeader}>
+          <ThemedText type="subtitle">Real-time Updates</ThemedText>
+          <View style={[styles.statusBadge, { backgroundColor: '#3b82f6' }]}>
+            <ThemedText style={styles.statusText}>
+              {realTimeUpdate.length > 0 ? `${realTimeUpdate.length}` : '0'}
             </ThemedText>
           </View>
+        </View>
+        
+        <View style={styles.locationInfo}>
+          <View style={styles.infoRow}>
+            <IconSymbol name="antenna.radiowaves.left.and.right" size={16} color="#6b7280" />
+            <ThemedText style={styles.infoText}>
+              {realTimeUpdate.length > 0 
+                ? `${realTimeUpdate.length} updates received` 
+                : 'Listening for updates...'}
+            </ThemedText>
+          </View>
+          
+          {realTimeUpdate.length > 0 && (
+            <ScrollView style={styles.updateList} nestedScrollEnabled={true}>
+              {realTimeUpdate.slice(-3).reverse().map((update, index) => (
+                <View key={index} style={styles.updateItem}>
+                  <View style={styles.infoRow}>
+                    <IconSymbol name="circle.fill" size={8} color={update.new?.status === 'occupied' ? '#ef4444' : '#22c55e'} />
+                    <ThemedText style={styles.updateText}>
+                      Status: {update.new?.status || 'Unknown'}
+                    </ThemedText>
+                  </View>
+                  <ThemedText style={styles.updateTime}>
+                    {new Date().toLocaleTimeString()}
+                  </ThemedText>
+                </View>
+              ))}
+            </ScrollView>
+          )}
+        </View>
+      </View>
+
+      {allSpots.length > 0 && (
+        <View style={styles.detailsCard}>
+          <ThemedText type="subtitle">Parking Spots Status</ThemedText>
+          <View style={styles.polygonInfo}>
+            <ThemedText style={styles.detailLabel}>Total Spots:</ThemedText>
+            <ThemedText style={styles.detailValue}>
+              {allSpots.length} spots
+            </ThemedText>
+          </View>
+          <ScrollView style={styles.spotsList} nestedScrollEnabled={true}>
+            {allSpots.map((spot) => (
+              <View key={spot.id} style={styles.spotItem}>
+                <View style={styles.spotHeader}>
+                  <ThemedText style={styles.spotId}>{spot.id}</ThemedText>
+                  <View style={[
+                    styles.statusBadge, 
+                    { backgroundColor: spot.status === 'occupied' ? '#ef4444' : '#22c55e' }
+                  ]}>
+                    <ThemedText style={styles.statusText}>
+                      {spot.status === 'occupied' ? 'OCCUPIED' : 'AVAILABLE'}
+                    </ThemedText>
+                  </View>
+                </View>
+              </View>
+            ))}
+          </ScrollView>
         </View>
       )}
     </ScrollView>
@@ -283,5 +378,49 @@ const styles = StyleSheet.create({
     color: '#dc2626',
     fontSize: 14,
     flex: 1,
+  },
+  updateList: {
+    maxHeight: 120,
+    marginTop: 8,
+  },
+  updateItem: {
+    backgroundColor: '#f8fafc',
+    padding: 8,
+    borderRadius: 6,
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  updateText: {
+    fontSize: 14,
+    color: '#1f2937',
+    fontWeight: '500',
+  },
+  updateTime: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginTop: 4,
+  },
+  spotsList: {
+    maxHeight: 200,
+    marginTop: 12,
+  },
+  spotItem: {
+    backgroundColor: '#f8fafc',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  spotHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  spotId: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1f2937',
   },
 });
