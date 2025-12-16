@@ -3,7 +3,7 @@ import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
 import * as Location from 'expo-location';
 import * as turf from '@turf/turf';
 
-import { loadHomeData, updatePolygonAvailability } from '../src/services/supabase';
+import { loadHomeData, updatePolygonAvailability, supabase } from '../src/services/supabase';
 
 const HOME_ID = 'H1';
 
@@ -13,6 +13,8 @@ export default function HomeTest() {
   const [inside, setInside] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [accuracy, setAccuracy] = useState<number | null>(null);
+  const [realtimeUpdate, setRealTimeUpdate] = useState<any []>([]);
+
 
   // 🔹 Load polygon from Supabase
   const loadPolygon = async () => {
@@ -69,7 +71,7 @@ export default function HomeTest() {
   };
 
   // Use turf to check the phone coords in poilygon and send the responses in supabase and update status
-  const checkPolygonLogic = (HOME_ID: string) => {
+  /*const checkPolygonLogic = (HOME_ID: string) => {
     if (polygon && coords) {
       const point = turf.point([coords.lng, coords.lat]);
       const isInside = turf.booleanPointInPolygon(point, polygon);
@@ -77,21 +79,30 @@ export default function HomeTest() {
       console.log("isInside", isInside);
       updatePolygonAvailability(HOME_ID, isInside);
     }
-  };
+  };*/
 
-
+  const showRealTime = () => {
+    const channels =  supabase.channel('custom-update-channel')
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'parking_spots_home'},
+    (payload) => {
+        console.log('channel update recieved!', payload)
+        setRealTimeUpdate(prev => [...prev, payload]);
+    })
+    .subscribe()
+  }
 
 
   // 🔹 Load polygon on mount
   useEffect(() => {
     loadPolygon();
+    showRealTime();
   }, []);
+
 
   // 🔹 Start GPS once polygon exists
   useEffect(() => {
     if (polygon) {
       startLocationTracking();
-      checkPolygonLogic(HOME_ID);
       
     }
   }, [polygon]);
@@ -101,6 +112,29 @@ export default function HomeTest() {
       <Text style={styles.title}>Home Test (Expo)</Text>
 
       {error && <Text style={styles.error}>Error: {error}</Text>}
+
+      <View style={[styles.card, { borderColor: '#3b82f6', borderWidth: 2 }]}>
+        <Text style={styles.label}>Real-time Updates</Text>
+        <Text style={[styles.subValue, { color: '#60a5fa' }]}>
+          {realtimeUpdate.length > 0 
+            ? `${realtimeUpdate.length} updates received` 
+            : 'Listening for updates...'}
+        </Text>
+        {realtimeUpdate.length > 0 && (
+          <ScrollView style={styles.updateList} nestedScrollEnabled={true}>
+            {realtimeUpdate.slice(-3).reverse().map((update, index) => (
+              <View key={index} style={styles.updateItem}>
+                <Text style={styles.updateText}>
+                  Status: {update.new?.status || 'Unknown'}
+                </Text>
+                <Text style={styles.updateTime}>
+                  {new Date().toLocaleTimeString()}
+                </Text>
+              </View>
+            ))}
+          </ScrollView>
+        )}
+      </View>
 
       <View style={styles.card}>
         <Text style={styles.label}>Current Coordinates</Text>
@@ -189,5 +223,24 @@ const styles = StyleSheet.create({
   json: {
     color: '#e5e7eb',
     fontSize: 12
+  },
+  updateList: {
+    maxHeight: 120,
+    marginTop: 8
+  },
+  updateItem: {
+    backgroundColor: '#334155',
+    padding: 8,
+    borderRadius: 6,
+    marginBottom: 6
+  },
+  updateText: {
+    color: '#ffffff',
+    fontSize: 14
+  },
+  updateTime: {
+    color: '#94a3b8',
+    fontSize: 12,
+    marginTop: 2
   }
 });

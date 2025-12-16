@@ -18,6 +18,19 @@ const getData = async () => {
   return data
 }
 
+const getRowCount = async () => {
+  const { count, error } = await supabase
+    .from('parking_spots')
+    .select('*', { count: 'exact', head: true })
+  
+  if (error) {
+    console.error('getRowCount error:', error)
+    throw error
+  }
+  
+  return count
+}
+
 
 const updateData = async (parkingLotSelect: boolean, spotsID: String) => {
     console.log('updateData called with:', { parkingLotSelect, spotsID })
@@ -47,31 +60,35 @@ const updateData = async (parkingLotSelect: boolean, spotsID: String) => {
 
 
 
-const loadHomeData = async (id: String) => {
-    console.log('loadHomeData called with id:', id)
-    console.log('loadHomeData: Fetching from parking_spots_home table')
-    let { data, error } = await supabase.from('parking_spots_home').select('polygon,status').eq('id', id);
-    console.log('loadHomeData raw response:', { data, error })
-    return { data, error };
+interface LoadHomeDataResult {
+    data: any[] | null;
+    error: any;
+}
+
+const loadHomeData = async (id: String): Promise<LoadHomeDataResult> => {
+    const result = await supabase.from('parking_spots').select('polygon,status').eq('id', id);
+    console.log('loadHomeData raw response:', { data: result.data, error: result.error })
+    return { data: result.data, error: result.error };
 };
 
 const loadPolygonData = async (id: String) => {
-    console.log("Load polygon function is in.")
-    let { data, error } = await supabase.from("parking_spots_home").select("polygon").eq("id", id);
+    let { data, error } = await supabase.from("parking_spots").select("polygon").eq("id", id);
     console.log("loadPolygonData raw response:", { data, error })
     return { data, error };
 }
 
+
+// Updates the supabase status in realtime (Hopegully)
 const updatePolygonAvailability = async (id: String, check: boolean) => {
     console.log("updatePolygonAvailability function is in.")
     if (check) {
-        const { data, error } = await supabase.from("parking_spots_home")
+        const { data, error } = await supabase.from("parking_spots")
             .update({ status: 'occupied' })
             .eq("id", id);
         console.log("spot is not available")
         if (error) console.error("Error updating to occupied:", error);
     } else {
-        const { data, error } = await supabase.from("parking_spots_home")
+        const { data, error } = await supabase.from("parking_spots")
             .update({ status: 'available' })
             .eq("id", id);
         console.log("spot is available")
@@ -81,5 +98,5 @@ const updatePolygonAvailability = async (id: String, check: boolean) => {
 
     
 
-export { getData, updateData, loadHomeData, loadPolygonData, updatePolygonAvailability }
+export { getData, updateData, loadHomeData, loadPolygonData, updatePolygonAvailability, getRowCount, supabase }
 
